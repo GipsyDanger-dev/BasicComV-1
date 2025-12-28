@@ -1,12 +1,16 @@
 # Large model files
 yolov3.weights
 yolov8n.pt
+*.pt
 
 # Output files
 output.mp4
 output.avi
+output_yolov8.mp4
+test_*.mp4
 *.mp4
 *.avi
+*.csv
 
 # Python
 __pycache__/
