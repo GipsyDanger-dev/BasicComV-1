@@ -255,10 +255,19 @@ def main():
         cap.release()
         return
     
+    # Initialize statistics and tracking
+    stats = DetectionStatistics() if args.stats_output else None
+    tracker = CentroidTracker(max_disappeared=40) if args.tracking else None
+    
     if is_video_input:
         print(f"Processing video... Press 'q' to quit")
     else:
         print("Starting object detection... Press 'q' to quit")
+    
+    if args.tracking:
+        print("Object tracking: ENABLED")
+    if args.stats_output:
+        print(f"Statistics will be exported to: {args.stats_output}")
     
     frame_count = 0
     start_time = time.time()
@@ -276,22 +285,57 @@ def main():
             # Detect objects
             indices, boxes, confidences, class_ids = detector.detect(frame)
             
+            # Update statistics
+            if stats and len(indices) > 0:
+                detected_classes = [detector.classes[class_ids[i]] for i in indices.flatten()]
+                detected_confidences = [confidences[i] for i in indices.flatten()]
+                stats.update(indices.flatten(), detected_classes, detected_confidences)
+            
+            # Update tracker
+            tracked_objects = {}
+            if tracker and len(indices) > 0:
+                # Convert boxes to (startX, startY, endX, endY) format
+                rects = []
+                for i in indices.flatten():
+                    x, y, w, h = boxes[i]
+                    rects.append((x, y, x + w, y + h))
+                tracked_objects = tracker.update(rects)
+            
             # Draw detections
             frame = detector.draw_detections(frame, indices, boxes, confidences, class_ids)
+            
+            # Draw tracking IDs
+            if tracker and len(tracked_objects) > 0:
+                for (object_id, centroid) in tracked_objects.items():
+                    text = f"ID {object_id}"
+                    cv2.putText(frame, text, (centroid[0] - 10, centroid[1] - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    cv2.circle(frame, (centroid[0], centroid[1]), 4, (0, 255, 0), -1)
             
             # Calculate and display FPS
             frame_count += 1
             current_time = time.time()
             fps = frame_count / (current_time - start_time)
             
+            # Display FPS
             cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            # Display statistics
+            if stats:
+                top_classes = stats.get_top_classes(3)
+                y_offset = 70
+                for i, (class_name, count, avg_conf) in enumerate(top_classes):
+                    text = f"{class_name}: {count} ({avg_conf:.2f})"
+                    cv2.putText(frame, text, (10, y_offset + i * 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             
             # Show progress for video input
             if is_video_input and total_frames > 0:
                 progress = (frame_count / total_frames) * 100
                 progress_text = f"Progress: {frame_count}/{total_frames} ({progress:.1f}%)"
-                cv2.putText(frame, progress_text, (10, 70),
+                y_pos = 160 if stats else 70
+                cv2.putText(frame, progress_text, (10, y_pos),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 # Console progress update every 30 frames
                 if frame_count % 30 == 0:
@@ -306,6 +350,14 @@ def main():
                 break
     
     finally:
+        # Export statistics if requested
+        if stats and args.stats_output:
+            try:
+                stats.export_csv(args.stats_output)
+                print(f"\nStatistics exported to: {args.stats_output}")
+            except Exception as e:
+                print(f"\nError exporting statistics: {e}")
+        
         # Cleanup
         total_time = time.time() - start_time
         avg_fps = frame_count / total_time if total_time > 0 else 0
