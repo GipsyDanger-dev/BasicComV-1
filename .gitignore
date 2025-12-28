@@ -1,0 +1,30 @@
+# Large model files
+yolov3.weights
+yolov8n.pt
+
+# Output files
+output.mp4
+output.avi
+*.mp4
+*.avi
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+myenv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
