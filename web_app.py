@@ -31,6 +31,7 @@ class DetectionSystem:
         self.fps = 0
         self.frame_count = 0
         self.start_time = None
+        self.process_every_n_frames = 2
     
     def start(self):
         if self.running:
@@ -61,65 +62,77 @@ class DetectionSystem:
         self.current_frame = None
     
     def _detection_loop(self):
+        process_frame_counter = 0
+        last_annotated_frame = None
+        
         while self.running:
             ret, frame = self.cap.read()
             if not ret:
                 break
             
-            results = self.model(frame, 
-                               conf=self.config['model']['confidence'],
-                               iou=self.config['model']['iou'],
-                               verbose=False)
+            process_frame_counter += 1
             
-            result = results[0]
-            annotated_frame = result.plot()
-            
-            if len(result.boxes) > 0:
-                boxes = result.boxes.xyxy.cpu().numpy()
-                confidences = result.boxes.conf.cpu().numpy()
-                class_ids = result.boxes.cls.cpu().numpy().astype(int)
-                class_names = [self.model.names[int(cls)] for cls in class_ids]
+            if process_frame_counter % self.process_every_n_frames == 0:
+                results = self.model(frame, 
+                                   conf=self.config['model']['confidence'],
+                                   iou=self.config['model']['iou'],
+                                   verbose=False)
+                
+                result = results[0]
+                annotated_frame = result.plot()
+                
+                if len(result.boxes) > 0:
+                    boxes = result.boxes.xyxy.cpu().numpy()
+                    confidences = result.boxes.conf.cpu().numpy()
+                    class_ids = result.boxes.cls.cpu().numpy().astype(int)
+                    class_names = [self.model.names[int(cls)] for cls in class_ids]
+                    
+                    if self.stats:
+                        self.stats.update(class_ids, class_names, confidences)
+                    
+                    if self.tracker:
+                        rects = [(int(x1), int(y1), int(x2), int(y2)) for x1, y1, x2, y2 in boxes]
+                        tracked_objects = self.tracker.update(rects)
+                        
+                        for (object_id, centroid) in tracked_objects.items():
+                            cv2.putText(annotated_frame, f"ID {object_id}", 
+                                      (centroid[0] - 10, centroid[1] - 10),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            cv2.circle(annotated_frame, (centroid[0], centroid[1]), 4, (0, 255, 0), -1)
+                    
+                    if self.zone_detector:
+                        xyxy_boxes = [(int(x1), int(y1), int(x2-x1), int(y2-y1)) for x1, y1, x2, y2 in boxes]
+                        self.zone_detector.check_detections(xyxy_boxes, class_ids)
+                        annotated_frame = self.zone_detector.draw_zones(annotated_frame)
+                
+                self.frame_count += 1
+                elapsed = time.time() - self.start_time
+                self.fps = self.frame_count / elapsed if elapsed > 0 else 0
+                
+                cv2.putText(annotated_frame, f"FPS: {self.fps:.1f}", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
                 if self.stats:
-                    self.stats.update(class_ids, class_names, confidences)
+                    top_classes = self.stats.get_top_classes(3)
+                    y_offset = 70
+                    for i, (class_name, count, avg_conf) in enumerate(top_classes):
+                        text = f"{class_name}: {count} ({avg_conf:.2f})"
+                        cv2.putText(annotated_frame, text, (10, y_offset + i * 30),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
                 
-                if self.tracker:
-                    rects = [(int(x1), int(y1), int(x2), int(y2)) for x1, y1, x2, y2 in boxes]
-                    tracked_objects = self.tracker.update(rects)
-                    
-                    for (object_id, centroid) in tracked_objects.items():
-                        cv2.putText(annotated_frame, f"ID {object_id}", 
-                                  (centroid[0] - 10, centroid[1] - 10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                        cv2.circle(annotated_frame, (centroid[0], centroid[1]), 4, (0, 255, 0), -1)
+                if self.alert_manager and self.stats and self.frame_count % 30 == 0:
+                    alerts = self.alert_manager.check_thresholds(self.stats)
+                    if alerts:
+                        self.alert_manager.process_alerts(alerts)
                 
-                if self.zone_detector:
-                    xyxy_boxes = [(int(x1), int(y1), int(x2-x1), int(y2-y1)) for x1, y1, x2, y2 in boxes]
-                    self.zone_detector.check_detections(xyxy_boxes, class_ids)
-                    annotated_frame = self.zone_detector.draw_zones(annotated_frame)
-            
-            self.frame_count += 1
-            elapsed = time.time() - self.start_time
-            self.fps = self.frame_count / elapsed if elapsed > 0 else 0
-            
-            cv2.putText(annotated_frame, f"FPS: {self.fps:.1f}", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
-            if self.stats:
-                top_classes = self.stats.get_top_classes(3)
-                y_offset = 70
-                for i, (class_name, count, avg_conf) in enumerate(top_classes):
-                    text = f"{class_name}: {count} ({avg_conf:.2f})"
-                    cv2.putText(annotated_frame, text, (10, y_offset + i * 30),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            
-            if self.alert_manager and self.stats:
-                alerts = self.alert_manager.check_thresholds(self.stats)
-                if alerts:
-                    self.alert_manager.process_alerts(alerts)
-            
-            with self.lock:
-                self.current_frame = annotated_frame.copy()
+                last_annotated_frame = annotated_frame
+                
+                with self.lock:
+                    self.current_frame = annotated_frame.copy()
+            else:
+                if last_annotated_frame is not None:
+                    with self.lock:
+                        self.current_frame = last_annotated_frame.copy()
     
     def get_frame(self):
         with self.lock:
@@ -129,20 +142,20 @@ class DetectionSystem:
     
     def get_stats(self):
         data = {
-            'fps': round(self.fps, 1),
-            'frame_count': self.frame_count,
-            'running': self.running
+            'fps': float(round(self.fps, 1)),
+            'frame_count': int(self.frame_count),
+            'running': bool(self.running)
         }
         
         if self.stats:
             top_classes = self.stats.get_top_classes(5)
             data['detections'] = [
-                {'class': name, 'count': count, 'confidence': round(conf, 2)}
+                {'class': str(name), 'count': int(count), 'confidence': float(round(conf, 2))}
                 for name, count, conf in top_classes
             ]
         
         if self.zone_detector:
-            data['zones'] = self.zone_detector.get_zone_stats()
+            data['zones'] = {str(k): int(v) for k, v in self.zone_detector.get_zone_stats().items()}
         
         return data
 
@@ -161,12 +174,13 @@ def video_feed():
         while True:
             frame = detection_system.get_frame()
             if frame is not None:
-                ret, buffer = cv2.imencode('.jpg', frame)
+                frame_resized = cv2.resize(frame, (640, 480))
+                ret, buffer = cv2.imencode('.jpg', frame_resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if ret:
                     frame_bytes = buffer.tobytes()
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.033)
+            time.sleep(0.05)
     
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
