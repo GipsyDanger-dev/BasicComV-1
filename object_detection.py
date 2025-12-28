@@ -4,9 +4,11 @@ import argparse
 import logging
 import os
 import time
+from statistics import DetectionStatistics
+from tracker import CentroidTracker
 
 class ObjectDetector:
-    def __init__(self, weights_path, config_path, names_path, confidence=0.5, threshold=0.3):
+    def __init__(self, weights_path, config_path, names_path, confidence=0.5, threshold=0.3, use_gpu=True):
         """
         Initialize YOLO Object Detector
         
@@ -16,6 +18,7 @@ class ObjectDetector:
             names_path: Path to class names file
             confidence: Minimum confidence threshold for detections
             threshold: NMS threshold for removing duplicate detections
+            use_gpu: Enable GPU acceleration if available (default: True)
         """
         self.confidence = confidence
         self.threshold = threshold
@@ -36,9 +39,30 @@ class ObjectDetector:
         try:
             self.net = cv2.dnn.readNetFromDarknet(config_path, weights_path)
 
-
-            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            # GPU acceleration setup
+            self.gpu_enabled = False
+            if use_gpu:
+                try:
+                    # Check if CUDA is available
+                    cuda_available = cv2.cuda.getCudaEnabledDeviceCount() > 0
+                    if cuda_available:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                        self.gpu_enabled = True
+                        self.logger.info("GPU acceleration ENABLED (CUDA)")
+                    else:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                        self.logger.info("GPU not available, using CPU")
+                except:
+                    # Fallback to CPU if CUDA check fails
+                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                    self.logger.info("GPU acceleration not available, using CPU")
+            else:
+                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                self.logger.info("GPU disabled by user, using CPU")
             
 
             layer_names = self.net.getLayerNames()
@@ -138,17 +162,30 @@ def main():
     parser.add_argument('--threshold', type=float, default=0.3,
                         help='NMS threshold for removing duplicate detections')
     
+    # Performance
+    parser.add_argument('--gpu', dest='use_gpu', action='store_true', default=True,
+                        help='Enable GPU acceleration (default: enabled)')
+    parser.add_argument('--no-gpu', dest='use_gpu', action='store_false',
+                        help='Disable GPU acceleration, force CPU mode')
+    
     # Input/Output
+    parser.add_argument('--input', type=str, default=None,
+                        help='Input video file path (if not specified, uses camera)')
     parser.add_argument('--camera', type=int, default=0,
-                        help='Camera device index')
+                        help='Camera device index (used if --input not specified)')
     parser.add_argument('--width', type=int, default=1280,
-                        help='Camera frame width')
+                        help='Camera frame width (ignored for video input)')
     parser.add_argument('--height', type=int, default=720,
-                        help='Camera frame height')
+                        help='Camera frame height (ignored for video input)')
     parser.add_argument('--fps', type=int, default=60,
-                        help='Target FPS for recording')
+                        help='Target FPS for recording (ignored for video input)')
     parser.add_argument('--output', type=str, default='output.mp4',
                         help='Output video file path')
+    # Statistics
+    parser.add_argument('--stats-output', type=str, default=None,
+                        help='Export statistics to CSV file (e.g., stats.csv)')
+    parser.add_argument('--tracking', action='store_true',
+                        help='Enable object tracking with persistent IDs')
     
     args = parser.parse_args()
     
@@ -159,7 +196,8 @@ def main():
             config_path=args.config,
             names_path=args.names,
             confidence=args.confidence,
-            threshold=args.threshold
+            threshold=args.threshold,
+            use_gpu=args.use_gpu
         )
     except FileNotFoundError as e:
         print(f"Error: {e}")
@@ -169,23 +207,44 @@ def main():
         print(f"Error initializing detector: {e}")
         return
     
-    # Initialize camera with validation
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        print(f"Error: Cannot open camera {args.camera}")
-        print("Please check if the camera is connected and not in use by another application.")
-        return
+    # Initialize input source (video file or camera)
+    is_video_input = args.input is not None
+    total_frames = 0
     
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-    cap.set(cv2.CAP_PROP_FPS, args.fps)
+    if is_video_input:
+        # Video file input
+        if not os.path.exists(args.input):
+            print(f"Error: Input video file not found: {args.input}")
+            return
+        
+        cap = cv2.VideoCapture(args.input)
+        if not cap.isOpened():
+            print(f"Error: Cannot open video file: {args.input}")
+            return
+        
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"Processing video: {args.input}")
+        print(f"Total frames: {total_frames}")
+    else:
+        # Camera input
+        cap = cv2.VideoCapture(args.camera)
+        if not cap.isOpened():
+            print(f"Error: Cannot open camera {args.camera}")
+            print("Please check if the camera is connected and not in use by another application.")
+            return
+        
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+        cap.set(cv2.CAP_PROP_FPS, args.fps)
+        print(f"Using camera {args.camera}")
     
-    # Get actual camera properties
+    # Get actual video properties
     actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     actual_fps = int(cap.get(cv2.CAP_PROP_FPS))
     
-    print(f"Camera initialized: {actual_width}x{actual_height} @ {actual_fps} FPS")
+    print(f"Resolution: {actual_width}x{actual_height} @ {actual_fps} FPS")
+    print(f"GPU: {'ENABLED' if detector.gpu_enabled else 'DISABLED (CPU)'}")
     
     # Initialize video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -196,7 +255,10 @@ def main():
         cap.release()
         return
     
-    print("Starting object detection... Press 'q' to quit")
+    if is_video_input:
+        print(f"Processing video... Press 'q' to quit")
+    else:
+        print("Starting object detection... Press 'q' to quit")
     
     frame_count = 0
     start_time = time.time()
@@ -205,7 +267,10 @@ def main():
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("Error: Failed to read frame from camera")
+                if is_video_input:
+                    print("\nVideo processing completed")
+                else:
+                    print("\nError: Failed to read frame from camera")
                 break
             
             # Detect objects
@@ -221,6 +286,16 @@ def main():
             
             cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            # Show progress for video input
+            if is_video_input and total_frames > 0:
+                progress = (frame_count / total_frames) * 100
+                progress_text = f"Progress: {frame_count}/{total_frames} ({progress:.1f}%)"
+                cv2.putText(frame, progress_text, (10, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                # Console progress update every 30 frames
+                if frame_count % 30 == 0:
+                    print(f"\rProcessing: {frame_count}/{total_frames} frames ({progress:.1f}%)", end="", flush=True)
             
             # Display frame
             cv2.imshow('Object Detection - Press Q to quit', frame)
