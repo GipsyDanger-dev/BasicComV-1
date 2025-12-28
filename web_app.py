@@ -4,10 +4,10 @@ import json
 import threading
 import time
 from ultralytics import YOLO
-from statistics import DetectionStatistics
-from tracker import CentroidTracker
-from zone_detector import ZoneDetector
-from alert_manager import AlertManager
+from modules.statistics import DetectionStatistics
+from modules.tracker import CentroidTracker
+from modules.zone_detector import ZoneDetector
+from modules.alert_manager import AlertManager
 
 
 app = Flask(__name__)
@@ -31,7 +31,7 @@ class DetectionSystem:
         self.fps = 0
         self.frame_count = 0
         self.start_time = None
-        self.process_every_n_frames = 2
+        self.process_every_n_frames = 4
     
     def start(self):
         if self.running:
@@ -174,13 +174,13 @@ def video_feed():
         while True:
             frame = detection_system.get_frame()
             if frame is not None:
-                frame_resized = cv2.resize(frame, (640, 480))
-                ret, buffer = cv2.imencode('.jpg', frame_resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                frame_resized = cv2.resize(frame, (480, 360))
+                ret, buffer = cv2.imencode('.jpg', frame_resized, [cv2.IMWRITE_JPEG_QUALITY, 50])
                 if ret:
                     frame_bytes = buffer.tobytes()
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.05)
+            time.sleep(0.1)
     
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 

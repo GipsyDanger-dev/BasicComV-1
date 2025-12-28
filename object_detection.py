@@ -4,8 +4,8 @@ import argparse
 import logging
 import os
 import time
-from statistics import DetectionStatistics
-from tracker import CentroidTracker
+from modules.statistics import DetectionStatistics
+from modules.tracker import CentroidTracker
 
 class ObjectDetector:
     def __init__(self, weights_path, config_path, names_path, confidence=0.5, threshold=0.3, use_gpu=True):

@@ -8,8 +8,8 @@ import argparse
 import time
 import os
 from ultralytics import YOLO
-from statistics import DetectionStatistics
-from tracker import CentroidTracker
+from modules.statistics import DetectionStatistics
+from modules.tracker import CentroidTracker
 
 
 def main():
