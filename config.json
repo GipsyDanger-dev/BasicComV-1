@@ -1,0 +1,45 @@
+{
+  "model": {
+    "name": "yolov8n.pt",
+    "confidence": 0.5,
+    "iou": 0.45,
+    "device": "auto"
+  },
+  "video": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "source": "0"
+  },
+  "features": {
+    "tracking": true,
+    "statistics": true,
+    "zones": false,
+    "alerts": false
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 5000,
+    "debug": false
+  },
+  "zones": [],
+  "alerts": {
+    "email": {
+      "enabled": false,
+      "smtp_server": "smtp.gmail.com",
+      "smtp_port": 587,
+      "username": "",
+      "password": "",
+      "recipients": []
+    },
+    "webhook": {
+      "enabled": false,
+      "url": ""
+    },
+    "thresholds": {
+      "max_objects": 10,
+      "min_objects": 0,
+      "dwell_time_seconds": 5
+    }
+  }
+}
